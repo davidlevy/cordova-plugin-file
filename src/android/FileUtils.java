@@ -50,6 +50,18 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import android.support.v4.os.EnvironmentCompat;
+import java.io.File;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+
+
 /**
  * This class provides file and directory services to JavaScript.
  */
@@ -122,7 +134,7 @@ public class FileUtils extends CordovaPlugin {
     }
 
     protected String[] getExtraFileSystemsPreference(Activity activity) {
-        String fileSystemsStr = preferences.getString("androidextrafilesystems", "files,files-external,documents,sdcard,cache,cache-external,assets,root");
+        String fileSystemsStr = preferences.getString("androidextrafilesystems", "files,files-external,documents,sdcard,sdcard1,cache,cache-external,assets,root");
         return fileSystemsStr.split(",");
     }
 
@@ -159,7 +171,26 @@ public class FileUtils extends CordovaPlugin {
         if (Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
           try {
             availableFileSystems.put("files-external", context.getExternalFilesDir(null).getAbsolutePath());
-            availableFileSystems.put("sdcard", Environment.getExternalStorageDirectory().getAbsolutePath());
+
+            //availableFileSystems.put("sdcard", Environment.getExternalStorageDirectory().getAbsolutePath());
+            availableFileSystems.put("sdcard1", "/mnt/extSdCard/");
+            //availableFileSystems.put("sdcard", "/storage/0403-0201/");
+            //availableFileSystems.put("sdcard", "/storage/3761-6430/");
+            //availableFileSystems.put("sdcard", "/storage/0403-0201/");
+
+            String[] storageDirectories = getStorageDirectories();
+            LOG.d(LOG_TAG, "External storage " + storageDirectories.length);
+            for(int i=0; i<storageDirectories.length; i++) {
+                String directory = storageDirectories[i];
+               // availableFileSystems.put("sdcard", "/storage/0403-0201/");
+                File f = new File(directory);
+                if(f.canRead() && directory.contains("Android")){
+                  availableFileSystems.put("sdcard", directory);
+                }
+            }
+
+
+
             availableFileSystems.put("cache-external", context.getExternalCacheDir().getAbsolutePath());
           }
           catch(NullPointerException e) {
@@ -570,7 +601,6 @@ public class FileUtils extends CordovaPlugin {
     private boolean needPermission(String nativeURL, int permissionType) throws JSONException {
         JSONObject j = requestAllPaths();
         ArrayList<String> allowedStorageDirectories = new ArrayList<String>();
-        allowedStorageDirectories.add(j.getString("applicationDirectory"));
         allowedStorageDirectories.add(j.getString("applicationStorageDirectory"));
         if(j.has("externalApplicationStorageDirectory")) {
             allowedStorageDirectories.add(j.getString("externalApplicationStorageDirectory"));
@@ -1222,4 +1252,88 @@ public class FileUtils extends CordovaPlugin {
            LOG.d(LOG_TAG, "Received permission callback for unknown request code");
         }
     }
+
+
+
+     /**
+         * Returns all available external SD-Cards in the system.
+         *
+         * @return paths to all available external SD-Cards in the system.
+         */
+        protected String[] getStorageDirectories() {
+
+            List<String> results = new ArrayList<String>();
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) { //Method 1 for KitKat & above
+                File[] externalDirs = this.cordova.getActivity().getApplicationContext().getExternalFilesDirs(null);
+
+                for (File file : externalDirs) {
+                    if(file == null){
+                        continue;
+                    }
+                    String applicationPath = file.getPath();
+                    String rootPath = applicationPath.split("/Android")[0];
+
+                    boolean addPath = false;
+
+                    if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        addPath = Environment.isExternalStorageRemovable(file);
+                    }
+                    else{
+                        addPath = Environment.MEDIA_MOUNTED.equals(EnvironmentCompat.getStorageState(file));
+                    }
+
+                    if(addPath){
+                        results.add(rootPath);
+                        results.add(applicationPath);
+                    }
+                }
+            }
+
+            if(results.isEmpty()) { //Method 2 for all versions
+                // better variation of: http://stackoverflow.com/a/40123073/5002496
+                String output = "";
+                try {
+                    final Process process = new ProcessBuilder().command("mount | grep /dev/block/vold")
+                            .redirectErrorStream(true).start();
+                    process.waitFor();
+                    final InputStream is = process.getInputStream();
+                    final byte[] buffer = new byte[1024];
+                    while (is.read(buffer) != -1) {
+                        output = output + new String(buffer);
+                    }
+                    is.close();
+                } catch (final Exception e) {
+                    e.printStackTrace();
+                }
+                if(!output.trim().isEmpty()) {
+                    String devicePoints[] = output.split("\n");
+                    for(String voldPoint: devicePoints) {
+                        results.add(voldPoint.split(" ")[2]);
+                    }
+                }
+            }
+
+            //Below few lines is to remove paths which may not be external memory card, like OTG (feel free to comment them out)
+            if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                for (int i = 0; i < results.size(); i++) {
+                    if (!results.get(i).toLowerCase().matches(".*[0-9a-f]{4}[-][0-9a-f]{4}.*")) {
+                        //diagnostic.logDebug(results.get(i) + " might not be extSDcard");
+                        results.remove(i--);
+                    }
+                }
+            } else {
+                for (int i = 0; i < results.size(); i++) {
+                    if (!results.get(i).toLowerCase().contains("ext") && !results.get(i).toLowerCase().contains("sdcard")) {
+                        //diagnostic.logDebug(results.get(i)+" might not be extSDcard");
+                        results.remove(i--);
+                    }
+                }
+            }
+
+            String[] storageDirectories = new String[results.size()];
+            for(int i=0; i<results.size(); ++i) storageDirectories[i] = results.get(i);
+
+            return storageDirectories;
+        }
 }
